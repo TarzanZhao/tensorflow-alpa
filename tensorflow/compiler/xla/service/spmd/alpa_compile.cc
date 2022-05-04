@@ -90,13 +90,14 @@ StatusOr<std::shared_ptr<xla::HloModule>> CreateHloModule(
   return hlo_module;
 }
 
-StatusOr<std::shared_ptr<xla::HloModule>> RunAutoShardingPass(
+StatusOr<std::vector<std::shared_ptr<xla::HloModule>>> RunAutoShardingPass(
     const XlaComputation& computation, CompileOptions options) {
   TF_ASSIGN_OR_RETURN(std::shared_ptr<HloModule> hlo_module,
                       CreateHloModule(computation, options));
   DumpHloModuleIfEnabled(*hlo_module, kBeforeAutoShardingDumpName);
   // TODO(yonghao): TF Profiler Traceme
   const DebugOptions& debug_options = hlo_module->config().debug_options();
+  std::shared_ptr<xla::HloModule> post_spmd_module = hlo_module->Clone();
   if (hlo_module->config().use_spmd_partitioning()) {
     HloPassPipeline spmd_pipeline("spmd-partitioner");
     const int64_t num_partitions = hlo_module->config().num_partitions();
@@ -145,11 +146,6 @@ StatusOr<std::shared_ptr<xla::HloModule>> RunAutoShardingPass(
 
       spmd_pipeline.AddPass<xla::spmd::AutoSharding>();
       spmd_pipeline.AddPass<xla::spmd::SliceAutoShardedStages>();
-
-      spmd_pipeline.AddPass<ShardingPropagation>(/*is_spmd=*/true);
-      spmd_pipeline.AddPass<gpu::GpuSpmdPartitioner>(
-          num_partitions, hlo_module->config().replica_count());
-      spmd_pipeline.AddPass<xla::spmd::GradAccRewrite>();
     } else {
       spmd_pipeline.AddPass<xla::spmd::SliceAutoShardedStages>();
       // Remove redundant sharding ops when partition_count == 1.
@@ -157,8 +153,17 @@ StatusOr<std::shared_ptr<xla::HloModule>> RunAutoShardingPass(
       spmd_pipeline.AddPass<HloDCE>();
     }
     TF_RETURN_IF_ERROR(spmd_pipeline.Run(hlo_module.get()).status());
+    post_spmd_module = hlo_module->Clone();
+    HloPassPipeline post_auto_sharding_spmd("post-auto-sharding");
+    if (num_partitions > 1) {
+      post_auto_sharding_spmd.AddPass<ShardingPropagation>(/*is_spmd=*/true);
+      post_auto_sharding_spmd.AddPass<gpu::GpuSpmdPartitioner>(
+          num_partitions, hlo_module->config().replica_count());
+      post_auto_sharding_spmd.AddPass<xla::spmd::GradAccRewrite>();
+    }
+    TF_RETURN_IF_ERROR(post_auto_sharding_spmd.Run(post_spmd_module.get()).status());
   }
-  return hlo_module;
+  return std::vector<std::shared_ptr<xla::HloModule>>({post_spmd_module, hlo_module});
 }
 
 StatusOr<std::shared_ptr<HloModule>> RunSpmdPartitionerPass(
