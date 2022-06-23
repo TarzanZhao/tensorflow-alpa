@@ -134,9 +134,11 @@ Status NcclLocalAllGather(const NcclCommStorage &storage,
   CHECK_EQ(n_devices, buffers.size());
   CHECK_EQ(n_devices, local_start_positions.size());
   CHECK_EQ(n_devices, storage.streams.size());
-
   ncclDataType_t dtype = ToNcclDataType(buffers[0].buf()->buffer()->on_device_shape().element_type());
   int dtype_size = SizeOfType(dtype);
+
+  for (int i = 0; i < n_devices; ++i) cudaStreamSynchronize(storage.streams[i]);
+
   XLA_CUDA_RETURN_IF_ERROR(ncclGroupStart());
   for (int i = 0; i < n_devices; ++i) {
     std::uintptr_t sendbuff = buffers[i].buf()->UnsafeBufferPointer().ValueOrDie();
@@ -174,9 +176,11 @@ Status NcclBroadcastPartialGPUs(const NcclCommStorage &storage,
   CHECK_EQ(n_devices, buffers.size());
   CHECK_EQ(n_devices, local_start_positions.size());
   CHECK_EQ(n_devices, storage.streams.size());
-
   ncclDataType_t dtype = ToNcclDataType(buffers[0].buf()->buffer()->on_device_shape().element_type());
   int dtype_size = SizeOfType(dtype);
+
+  for (int i = 0; i < n_devices; ++i) cudaStreamSynchronize(storage.streams[i]);
+
   XLA_CUDA_RETURN_IF_ERROR(ncclGroupStart());
   for (int i = 0; i < n_devices; ++i) {
     std::uintptr_t sendbuff = buffers[i].buf()->UnsafeBufferPointer().ValueOrDie();
@@ -204,6 +208,7 @@ Status NcclSend(const NcclCommStorage &storage,
   int dtype_size = SizeOfType(dtype);
   std::uintptr_t sendbuff = buffer.buf()->UnsafeBufferPointer().ValueOrDie();
   sendbuff = sendbuff + start*dtype_size;
+  cudaStreamSynchronize(storage.streams[0]);
   XLA_CUDA_RETURN_IF_ERROR(ncclSend((void*)sendbuff, n_elements, dtype, peer_p2p_rank, storage.comms[0], storage.streams[0]));
   cudaStreamSynchronize(storage.streams[0]);
   return Status::OK();
@@ -222,6 +227,7 @@ Status NcclRecv(const NcclCommStorage &storage,
   int dtype_size = SizeOfType(dtype);
   std::uintptr_t recvbuff = buffer.buf()->UnsafeBufferPointer().ValueOrDie();
   recvbuff = recvbuff + start*dtype_size;
+  cudaStreamSynchronize(storage.streams[0]);
   XLA_CUDA_RETURN_IF_ERROR(ncclRecv((void*)recvbuff, n_elements, dtype, peer_p2p_rank, storage.comms[0], storage.streams[0]));
   cudaStreamSynchronize(storage.streams[0]);
   return Status::OK();
